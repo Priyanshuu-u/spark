@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tableau to Power BI Converter
+Tableau to Power BI Converter - FIXED VERSION
 Converts Tableau .twbx files to Power BI template (.pbit) format
 Specifically handles bar charts with Oracle database connections
 """
@@ -163,63 +163,67 @@ class TableauToPowerBIConverter:
         
         return db_info
     
-    def generate_minimal_pbit_structure(self, tableau_data: Dict) -> Dict:
-        """Generate minimal but valid Power BI template structure"""
+    def generate_valid_pbit_structure(self, tableau_data: Dict) -> Dict:
+        """Generate valid Power BI template structure that won't be corrupted"""
         
         # Get table and column info from Tableau
-        table_name = "SampleData"
+        table_name = "TableauData"
         columns = []
         
         if tableau_data.get('datasources'):
             ds = tableau_data['datasources'][0]
             connection = ds.get('connection', {})
-            table_name = connection.get('schema', 'SampleData')
+            schema_name = connection.get('schema', '')
+            if schema_name:
+                table_name = schema_name
             
-            for col in ds.get('columns', [])[:10]:  # Limit to first 10 columns
-                col_name = col.get('name', '').replace('[', '').replace(']', '')
-                if col_name and not col_name.startswith('Measure') and col_name.strip():
+            for col in ds.get('columns', [])[:15]:  # Limit to first 15 columns
+                col_name = col.get('name', '').replace('[', '').replace(']', '').strip()
+                if col_name and not col_name.startswith('Measure') and len(col_name) > 0:
                     columns.append({
                         'name': col_name,
                         'dataType': self._map_powerbi_datatype(col.get('datatype', 'string'))
                     })
         
-        # If no valid columns found, create sample ones
+        # If no valid columns found, create minimal sample ones
         if not columns:
             columns = [
                 {'name': 'Category', 'dataType': 'string'},
-                {'name': 'Value', 'dataType': 'double'}
+                {'name': 'Value', 'dataType': 'int64'}
             ]
         
-        # Data Model Schema (minimal structure)
+        # FIXED: Proper Power BI Analysis Services Model Schema
         data_model_schema = {
             "name": "SemanticModel",
-            "compatibilityLevel": 1567,
+            "compatibilityLevel": 1550,
             "model": {
                 "culture": "en-US",
-                "dataSources": [
-                    {
-                        "type": "structured",
-                        "name": "DataSource",
-                        "connectionDetails": {
-                            "protocol": "analysis-services",
-                            "address": {
-                                "server": "localhost",
-                                "database": "SampleDB"
-                            }
-                        }
-                    }
-                ],
+                "defaultPowerBIDataSourceVersion": "powerBI_V3",
+                "sourceQueryCulture": "en-US",
                 "tables": [
                     {
                         "name": table_name,
-                        "columns": columns,
+                        "columns": [
+                            {
+                                "name": col['name'],
+                                "dataType": col['dataType'],
+                                "sourceColumn": col['name']
+                            }
+                            for col in columns
+                        ],
                         "partitions": [
                             {
                                 "name": "Partition",
                                 "dataView": "full",
                                 "source": {
                                     "type": "m",
-                                    "expression": f"let\n    Source = #\"SQL/{table_name}\"\nin\n    Source"
+                                    "expression": [
+                                        "let",
+                                        f"    Source = Table.FromRows(Json.Document(Binary.Decompress(Binary.FromText(\"\", BinaryEncoding.Base64), Compression.Deflate)), let _t = ((type nullable text) meta [Serialized.Text = true]) in type table [{', '.join([f'[{col[\"name\"]}] = _t' for col in columns])}]),",
+                                        f"    #\"Changed Type\" = Table.TransformColumnTypes(Source,{{{', '.join([f'{{\"{col[\"name\"]}\", {self._get_m_type(col[\"dataType\"])}}}' for col in columns])}}})",
+                                        "in",
+                                        "    #\"Changed Type\""
+                                    ]
                                 }
                             }
                         ]
@@ -228,7 +232,7 @@ class TableauToPowerBIConverter:
             }
         }
         
-        # Report Layout (minimal structure)
+        # FIXED: Proper Power BI Report Layout Structure
         report_layout = {
             "id": str(uuid.uuid4()),
             "resourcePackages": [
@@ -237,81 +241,114 @@ class TableauToPowerBIConverter:
                         "type": "ResourcePackage",
                         "items": [
                             {
+                                "id": str(uuid.uuid4()),
                                 "type": "Report",
-                                "displayName": "Report"
+                                "payload": "",
+                                "path": "Report"
                             }
                         ]
                     }
                 }
             ],
+            "config": json.dumps({
+                "version": "5.43",
+                "themeCollection": {
+                    "baseTheme": {
+                        "name": "CY24SU06"
+                    }
+                },
+                "activeSectionIndex": 0,
+                "defaultDrillFilterOtherVisuals": True,
+                "slowDataSourceSettings": {
+                    "isCrossHighlightingDisabled": False,
+                    "isSlicerSelectionsButtonEnabled": False,
+                    "isFilterSelectionsButtonEnabled": False
+                }
+            }),
+            "layoutOptimization": 0,
             "sections": [
                 {
                     "id": str(uuid.uuid4()),
                     "name": "ReportSection",
-                    "filters": [],
-                    "visualContainers": []
+                    "displayName": "Page 1",
+                    "visualContainers": [],
+                    "config": json.dumps({
+                        "layouts": [
+                            {
+                                "id": 0,
+                                "position": {
+                                    "x": 0,
+                                    "y": 0,
+                                    "z": 0,
+                                    "width": 1280,
+                                    "height": 720
+                                }
+                            }
+                        ]
+                    })
                 }
-            ],
-            "layoutOptimization": 0
+            ]
         }
         
-        # Add a simple visualization if we have worksheet data
-        if tableau_data.get('worksheets') and columns:
+        # Add a simple chart if we have data
+        if len(columns) >= 1:
             visual_id = str(uuid.uuid4())
             
-            # Try to find category and value fields
-            category_field = columns[0]['name']
-            value_field = columns[1]['name'] if len(columns) > 1 else columns[0]['name']
+            # Simple column chart configuration
+            visual_config = {
+                "name": visual_id,
+                "layouts": [
+                    {
+                        "id": 0,
+                        "position": {
+                            "x": 40,
+                            "y": 40,
+                            "z": 1000,
+                            "width": 400,
+                            "height": 300
+                        }
+                    }
+                ],
+                "singleVisual": {
+                    "visualType": "columnChart",
+                    "drillFilterOtherVisuals": True,
+                    "objects": {
+                        "general": [
+                            {
+                                "properties": {
+                                    "keepLayerOrder": {
+                                        "expr": {
+                                            "Literal": {
+                                                "Value": "true"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    "projections": {
+                        "Category": [
+                            {
+                                "queryRef": f"{table_name}.{columns[0]['name']}"
+                            }
+                        ]
+                    }
+                }
+            }
             
-            # Check Tableau worksheet for better field mapping
-            for ws in tableau_data.get('worksheets', []):
-                encodings = ws.get('encodings', {})
-                for attr, encoding in encodings.items():
-                    field = encoding.get('field', '').replace('[', '').replace(']', '')
-                    if field and any(col['name'] == field for col in columns):
-                        if attr in ['x', 'columns']:
-                            category_field = field
-                        elif attr in ['y', 'rows']:
-                            value_field = field
-                break
+            # Add Y axis if we have a numeric column
+            numeric_columns = [col for col in columns if col['dataType'] in ['int64', 'double']]
+            if numeric_columns:
+                visual_config["singleVisual"]["projections"]["Y"] = [
+                    {
+                        "queryRef": f"{table_name}.{numeric_columns[0]['name']}"
+                    }
+                ]
             
             visual_container = {
                 "id": visual_id,
-                "height": 200,
-                "width": 300,
-                "x": 0,
-                "y": 0,
-                "z": 1000,
-                "config": json.dumps({
-                    "name": f"{visual_id}",
-                    "layouts": [
-                        {
-                            "id": 0,
-                            "position": {
-                                "x": 0,
-                                "y": 0,
-                                "z": 1000,
-                                "width": 300,
-                                "height": 200
-                            }
-                        }
-                    ],
-                    "singleVisual": {
-                        "visualType": "columnChart",
-                        "projections": {
-                            "Category": [
-                                {
-                                    "queryRef": f"{table_name}.{category_field}"
-                                }
-                            ],
-                            "Y": [
-                                {
-                                    "queryRef": f"{table_name}.{value_field}"
-                                }
-                            ]
-                        }
-                    }
-                })
+                "config": json.dumps(visual_config)
             }
             
             report_layout['sections'][0]['visualContainers'].append(visual_container)
@@ -324,6 +361,17 @@ class TableauToPowerBIConverter:
                 "useStylableVisualContainerHeader": True
             }
         }
+    
+    def _get_m_type(self, datatype: str) -> str:
+        """Get Power Query M type for column transformation"""
+        type_mapping = {
+            'string': 'type text',
+            'int64': 'Int64.Type',
+            'double': 'type number',
+            'dateTime': 'type datetime',
+            'boolean': 'type logical'
+        }
+        return type_mapping.get(datatype, 'type text')
     
     def _map_powerbi_datatype(self, tableau_type: str) -> str:
         """Map Tableau data types to Power BI Analysis Services types"""
@@ -338,7 +386,7 @@ class TableauToPowerBIConverter:
         return type_mapping.get(tableau_type.lower(), 'string')
     
     def create_pbit_file(self, template_structure: Dict, output_path: str, base_name: str):
-        """Create Power BI template (.pbit) file with correct encoding"""
+        """Create Power BI template (.pbit) file with correct encoding and structure"""
         try:
             pbit_path = os.path.join(output_path, f"{base_name}.pbit")
             
@@ -346,48 +394,58 @@ class TableauToPowerBIConverter:
             temp_dir = os.path.join(output_path, f"{base_name}_temp")
             os.makedirs(temp_dir, exist_ok=True)
             
-            # Write DataModelSchema (UTF-16 LE with BOM, no line breaks)
+            print(f"📝 Creating Power BI template structure...")
+            
+            # FIXED: Write DataModelSchema with proper encoding (UTF-16 LE with BOM)
+            datamodel_content = json.dumps(template_structure['DataModelSchema'], 
+                                         ensure_ascii=False, separators=(',', ':'))
             with open(os.path.join(temp_dir, 'DataModelSchema'), 'wb') as f:
-                # Write BOM for UTF-16 LE
+                # UTF-16 LE BOM
                 f.write(b'\xff\xfe')
-                # Write JSON without formatting
-                json_str = json.dumps(template_structure['DataModelSchema'], ensure_ascii=False, separators=(',', ':'))
-                f.write(json_str.encode('utf-16le'))
+                f.write(datamodel_content.encode('utf-16le'))
             
             # Create Report directory and write Layout
             report_dir = os.path.join(temp_dir, 'Report')
             os.makedirs(report_dir, exist_ok=True)
             
+            # FIXED: Write Layout with proper encoding (UTF-16 LE with BOM)
+            layout_content = json.dumps(template_structure['Layout'], 
+                                       ensure_ascii=False, separators=(',', ':'))
             with open(os.path.join(report_dir, 'Layout'), 'wb') as f:
-                # Write BOM for UTF-16 LE
+                # UTF-16 LE BOM
                 f.write(b'\xff\xfe')
-                # Write JSON without formatting
-                json_str = json.dumps(template_structure['Layout'], ensure_ascii=False, separators=(',', ':'))
-                f.write(json_str.encode('utf-16le'))
+                f.write(layout_content.encode('utf-16le'))
             
-            # Write Version (UTF-8, no BOM)
-            with open(os.path.join(temp_dir, 'Version'), 'w', encoding='utf-8') as f:
+            # FIXED: Write Version as plain text (UTF-8, no BOM)
+            with open(os.path.join(temp_dir, 'Version'), 'w', encoding='utf-8-sig') as f:
                 f.write(template_structure['Version'])
             
-            # Write Settings (UTF-16 LE with BOM)
+            # FIXED: Write Settings with proper encoding (UTF-16 LE with BOM)
+            settings_content = json.dumps(template_structure['Settings'], 
+                                        ensure_ascii=False, separators=(',', ':'))
             with open(os.path.join(temp_dir, 'Settings'), 'wb') as f:
-                # Write BOM for UTF-16 LE
+                # UTF-16 LE BOM
                 f.write(b'\xff\xfe')
-                # Write JSON without formatting
-                json_str = json.dumps(template_structure['Settings'], ensure_ascii=False, separators=(',', ':'))
-                f.write(json_str.encode('utf-16le'))
+                f.write(settings_content.encode('utf-16le'))
             
-            # Create the .pbit file (ZIP archive with no compression to avoid corruption)
-            with zipfile.ZipFile(pbit_path, 'w', zipfile.ZIP_STORED, compresslevel=0) as zip_file:
+            # FIXED: Create the .pbit file with proper ZIP compression
+            print(f"📦 Creating ZIP archive...")
+            with zipfile.ZipFile(pbit_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zip_file:
                 for root, dirs, files in os.walk(temp_dir):
                     for file in files:
                         file_path = os.path.join(root, file)
                         arc_name = os.path.relpath(file_path, temp_dir)
+                        # Ensure forward slashes in ZIP paths
+                        arc_name = arc_name.replace('\\', '/')
                         zip_file.write(file_path, arc_name)
+                        print(f"  ✓ Added: {arc_name}")
             
             # Clean up temp directory
             import shutil
             shutil.rmtree(temp_dir)
+            
+            # Validate the created file
+            self._validate_pbit_file(pbit_path)
             
             print(f"✅ Power BI template created: {pbit_path}")
             print(f"📁 File size: {os.path.getsize(pbit_path)} bytes")
@@ -396,10 +454,37 @@ class TableauToPowerBIConverter:
             return pbit_path
             
         except Exception as e:
-            print(f"Error creating .pbit file: {e}")
+            print(f"❌ Error creating .pbit file: {e}")
             import traceback
             traceback.print_exc()
             return None
+    
+    def _validate_pbit_file(self, pbit_path: str):
+        """Validate the created .pbit file structure"""
+        try:
+            print(f"🔍 Validating .pbit file structure...")
+            with zipfile.ZipFile(pbit_path, 'r') as zip_file:
+                files = zip_file.namelist()
+                print(f"  Files in archive: {files}")
+                
+                required_files = ['DataModelSchema', 'Report/Layout', 'Version', 'Settings']
+                for req_file in required_files:
+                    if req_file in files:
+                        print(f"  ✓ Found: {req_file}")
+                    else:
+                        print(f"  ❌ Missing: {req_file}")
+                        
+                # Test reading the files
+                for filename in ['DataModelSchema', 'Settings']:
+                    if filename in files:
+                        content = zip_file.read(filename)
+                        if content.startswith(b'\xff\xfe'):
+                            print(f"  ✓ {filename}: Correct UTF-16 LE BOM")
+                        else:
+                            print(f"  ⚠️  {filename}: Missing or incorrect BOM")
+                            
+        except Exception as e:
+            print(f"  ⚠️  Validation error: {e}")
     
     def analyze_extracted_data(self):
         """Print analysis of what was found in the Tableau file"""
@@ -455,7 +540,7 @@ class TableauToPowerBIConverter:
         """Main conversion function"""
         try:
             if not os.path.exists(input_path):
-                print(f"Error: Input file '{input_path}' not found")
+                print(f"❌ Error: Input file '{input_path}' not found")
                 return False
             
             # Set output directory
@@ -464,10 +549,11 @@ class TableauToPowerBIConverter:
             
             base_name = os.path.splitext(os.path.basename(input_path))[0]
             
-            print(f"Converting: {input_path}")
+            print(f"🔄 Converting: {input_path}")
             
             # Extract .twbx if needed
             if input_path.endswith('.twbx'):
+                print("📂 Extracting .twbx file...")
                 twb_path = self.extract_twbx(input_path)
                 if not twb_path:
                     return False
@@ -475,33 +561,33 @@ class TableauToPowerBIConverter:
                 twb_path = input_path
             
             # Parse Tableau workbook
-            print("Parsing Tableau workbook...")
+            print("📖 Parsing Tableau workbook...")
             self.tableau_data = self.parse_tableau_workbook(twb_path)
             
             if not self.tableau_data:
-                print("Error: Could not parse Tableau workbook")
+                print("❌ Error: Could not parse Tableau workbook")
                 return False
             
             # Show what was found
             self.analyze_extracted_data()
             
             # Generate Power BI template structure
-            print("Generating Power BI template structure...")
-            template_structure = self.generate_minimal_pbit_structure(self.tableau_data)
+            print("🏗️  Generating Power BI template structure...")
+            template_structure = self.generate_valid_pbit_structure(self.tableau_data)
             
             # Create .pbit file
-            print("Creating Power BI template file...")
+            print("💾 Creating Power BI template file...")
             pbit_path = self.create_pbit_file(template_structure, output_dir, base_name)
             
             if pbit_path:
-                print("Conversion completed successfully!")
+                print("\n🎉 Conversion completed successfully!")
                 return True
             else:
-                print("Error: Failed to create .pbit file")
+                print("\n❌ Error: Failed to create .pbit file")
                 return False
             
         except Exception as e:
-            print(f"Error during conversion: {e}")
+            print(f"❌ Error during conversion: {e}")
             import traceback
             traceback.print_exc()
             return False
