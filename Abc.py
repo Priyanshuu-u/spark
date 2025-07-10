@@ -173,15 +173,24 @@ class TableauToPowerBIConverter:
         if tableau_data.get('datasources'):
             ds = tableau_data['datasources'][0]
             connection = ds.get('connection', {})
-            table_name = connection.get('schema', 'SampleData')
+            # Use the datasource name or schema as table name
+            table_name = ds.get('name', connection.get('schema', 'SampleData'))
+            if table_name.startswith('federated.'):
+                table_name = "SampleData"  # Clean up federated names
             
-            for col in ds.get('columns', [])[:10]:  # Limit to first 10 columns
+            # Deduplicate columns by name
+            seen_columns = set()
+            for col in ds.get('columns', []):
                 col_name = col.get('name', '').replace('[', '').replace(']', '')
-                if col_name and not col_name.startswith('Measure') and col_name.strip():
+                if (col_name and not col_name.startswith('Measure') and 
+                    col_name.strip() and col_name not in seen_columns):
                     columns.append({
                         'name': col_name,
                         'dataType': self._map_powerbi_datatype(col.get('datatype', 'string'))
                     })
+                    seen_columns.add(col_name)
+                    if len(columns) >= 10:  # Limit to 10 columns
+                        break
         
         # If no valid columns found, create sample ones
         if not columns:
@@ -190,36 +199,78 @@ class TableauToPowerBIConverter:
                 {'name': 'Value', 'dataType': 'double'}
             ]
         
-        # Data Model Schema (minimal structure)
+        print(f"📋 Using table name: {table_name}")
+        print(f"📋 Generated {len(columns)} columns: {[col['name'] for col in columns]}")
+        
+        # Data Model Schema - Fixed structure for Power BI compatibility
         data_model_schema = {
+            "version": "1.0",
+            "defaultPowerBIDataSourceVersion": "powerBI_V3",
+            "dataAccessOptions": {
+                "legacyRedirects": True,
+                "returnErrorValuesAsNull": True
+            },
             "name": "SemanticModel",
             "compatibilityLevel": 1567,
-            "model": {
-                "culture": "en-US",
-                "dataSources": [
-                    {
-                        "type": "structured",
-                        "name": "DataSource",
-                        "connectionDetails": {
-                            "protocol": "analysis-services",
-                            "address": {
-                                "server": "localhost",
-                                "database": "SampleDB"
-                            }
-                        }
+            "defaultLocale": "en-US",
+            "dataSources": [
+                {
+                    "type": "structured",
+                    "name": "DataSource1", 
+                    "connectionDetails": {
+                        "protocol": "tds",
+                        "address": {
+                            "server": "localhost",
+                            "database": "SampleDB"
+                        },
+                        "authentication": None,
+                        "query": None
+                    },
+                    "options": {
+                        "includeRelationshipColumns": False,
+                        "privacy": "Public"
+                    },
+                    "credential": {
+                        "AuthenticationKind": "UsernamePassword",
+                        "kind": "SQL",
+                        "path": "localhost;SampleDB",
+                        "Username": "TableauUser"
                     }
-                ],
+                }
+            ],
+            "model": {
+                "name": "SemanticModel",
+                "description": "Converted from Tableau workbook",
+                "culture": "en-US",
+                "defaultLocale": "en-US",
+                "collation": "Latin1_General_CI_AS",
+                "dataAccessOptions": {
+                    "legacyRedirects": True,
+                    "returnErrorValuesAsNull": True
+                },
                 "tables": [
                     {
                         "name": table_name,
-                        "columns": columns,
+                        "lineageTag": str(uuid.uuid4()),
+                        "columns": [
+                            {
+                                "name": col['name'],
+                                "lineageTag": str(uuid.uuid4()),
+                                "dataType": col['dataType'],
+                                "sourceColumn": col['name'],
+                                "summarizeBy": "none" if col['dataType'] == "string" else "sum",
+                                "displayOrdinal": idx
+                            }
+                            for idx, col in enumerate(columns)
+                        ],
                         "partitions": [
                             {
-                                "name": "Partition",
+                                "name": f"{table_name}-Partition",
+                                "mode": "import",
                                 "dataView": "full",
                                 "source": {
                                     "type": "m",
-                                    "expression": f"let\n    Source = #\"SQL/{table_name}\"\nin\n    Source"
+                                    "expression": f'let\n    Source = Sql.Database("localhost", "SampleDB"),\n    dbo_{table_name} = Source{{[Schema="dbo",Item="{table_name}"]}}[Data]\nin\n    dbo_{table_name}'
                                 }
                             }
                         ]
@@ -228,9 +279,64 @@ class TableauToPowerBIConverter:
             }
         }
         
-        # Report Layout (minimal structure)
+        # Report Layout - Fixed structure for Power BI compatibility  
+        report_id = str(uuid.uuid4())
+        section_id = str(uuid.uuid4())
+        
         report_layout = {
-            "id": str(uuid.uuid4()),
+            "id": report_id,
+            "displayName": "Converted Tableau Report",
+            "description": "Report converted from Tableau workbook",
+            "pages": [
+                {
+                    "id": section_id,
+                    "displayName": "Page 1",
+                    "width": 1280,
+                    "height": 720,
+                    "displayOption": 1,
+                    "visualContainers": [],
+                    "filters": [],
+                    "config": {
+                        "layouts": [
+                            {
+                                "id": 0,
+                                "position": {
+                                    "x": 0,
+                                    "y": 0,
+                                    "z": 0,
+                                    "width": 1280,
+                                    "height": 720
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "config": {
+                "theme": {
+                    "name": "CityPark"
+                },
+                "layoutType": 0,
+                "objects": {
+                    "section": [
+                        {
+                            "properties": {
+                                "page": {
+                                    "background": [
+                                        {
+                                            "color": {
+                                                "solid": {
+                                                    "color": "#FFFFFF"
+                                                }
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
             "resourcePackages": [
                 {
                     "resourcePackage": {
@@ -238,21 +344,13 @@ class TableauToPowerBIConverter:
                         "items": [
                             {
                                 "type": "Report",
-                                "displayName": "Report"
+                                "displayName": "Report",
+                                "id": report_id
                             }
                         ]
                     }
                 }
-            ],
-            "sections": [
-                {
-                    "id": str(uuid.uuid4()),
-                    "name": "ReportSection",
-                    "filters": [],
-                    "visualContainers": []
-                }
-            ],
-            "layoutOptimization": 0
+            ]
         }
         
         # Add a simple visualization if we have worksheet data
@@ -275,24 +373,25 @@ class TableauToPowerBIConverter:
                             value_field = field
                 break
             
+            # Create a proper visual container for Power BI
             visual_container = {
                 "id": visual_id,
-                "height": 200,
-                "width": 300,
-                "x": 0,
-                "y": 0,
+                "x": 50,
+                "y": 50,
                 "z": 1000,
-                "config": json.dumps({
-                    "name": f"{visual_id}",
+                "width": 600,
+                "height": 400,
+                "config": {
+                    "name": visual_id,
                     "layouts": [
                         {
                             "id": 0,
                             "position": {
-                                "x": 0,
-                                "y": 0,
+                                "x": 50,
+                                "y": 50,
                                 "z": 1000,
-                                "width": 300,
-                                "height": 200
+                                "width": 600,
+                                "height": 400
                             }
                         }
                     ],
@@ -301,29 +400,143 @@ class TableauToPowerBIConverter:
                         "projections": {
                             "Category": [
                                 {
-                                    "queryRef": f"{table_name}.{category_field}"
+                                    "queryRef": f"{table_name}.{category_field}",
+                                    "active": True
                                 }
                             ],
                             "Y": [
                                 {
-                                    "queryRef": f"{table_name}.{value_field}"
+                                    "queryRef": f"{table_name}.{value_field}",
+                                    "active": True
+                                }
+                            ]
+                        },
+                        "prototypeQuery": {
+                            "Version": 2,
+                            "From": [
+                                {
+                                    "Name": "t", 
+                                    "Entity": table_name,
+                                    "Type": 0
+                                }
+                            ],
+                            "Select": [
+                                {
+                                    "Column": {
+                                        "Expression": {
+                                            "SourceRef": {
+                                                "Source": "t"
+                                            }
+                                        },
+                                        "Property": category_field
+                                    },
+                                    "Name": f"{table_name}.{category_field}"
+                                },
+                                {
+                                    "Aggregation": {
+                                        "Expression": {
+                                            "Column": {
+                                                "Expression": {
+                                                    "SourceRef": {
+                                                        "Source": "t" 
+                                                    }
+                                                },
+                                                "Property": value_field
+                                            }
+                                        },
+                                        "Function": 1
+                                    },
+                                    "Name": f"Sum({table_name}.{value_field})"
                                 }
                             ]
                         }
                     }
-                })
+                }
             }
             
-            report_layout['sections'][0]['visualContainers'].append(visual_container)
+            # Add the visual to the page
+            report_layout['pages'][0]['visualContainers'].append(visual_container)
+            
+            print(f"📊 Added column chart visual: {category_field} vs {value_field}")
+        
+        # Create metadata structure
+        metadata = {
+            "version": "4.0",
+            "culture": "en-US",
+            "modifiedTime": "2024-01-01T00:00:00.000Z"
+        }
         
         return {
             'DataModelSchema': data_model_schema,
             'Layout': report_layout,
             'Version': '4.0',
             'Settings': {
-                "useStylableVisualContainerHeader": True
-            }
+                "useStylableVisualContainerHeader": True,
+                "exportDataMode": 1,
+                "useNewFilterPaneExperience": True
+            },
+            'Metadata': metadata
         }
+    
+    
+    def _validate_pbit_structure(self, temp_dir: str):
+        """Validate the generated Power BI template structure"""
+        required_files = ['DataModelSchema', 'Version', 'Settings', 'Metadata']
+        required_dirs = ['Report']
+        
+        print("🔍 Validating file structure...")
+        
+        # Check required files
+        for file_name in required_files:
+            file_path = os.path.join(temp_dir, file_name)
+            if not os.path.exists(file_path):
+                raise ValueError(f"Missing required file: {file_name}")
+            
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                raise ValueError(f"Empty required file: {file_name}")
+            print(f"  ✅ {file_name} ({file_size} bytes)")
+        
+        # Check required directories and their contents
+        for dir_name in required_dirs:
+            dir_path = os.path.join(temp_dir, dir_name)
+            if not os.path.exists(dir_path):
+                raise ValueError(f"Missing required directory: {dir_name}")
+            
+            # Check Layout file in Report directory
+            layout_path = os.path.join(dir_path, 'Layout')
+            if not os.path.exists(layout_path):
+                raise ValueError("Missing Layout file in Report directory")
+            
+            layout_size = os.path.getsize(layout_path)
+            print(f"  ✅ {dir_name}/Layout ({layout_size} bytes)")
+        
+        # Validate JSON structure by attempting to parse key files
+        print("🔍 Validating JSON structures...")
+        
+        # Validate DataModelSchema
+        try:
+            with open(os.path.join(temp_dir, 'DataModelSchema'), 'rb') as f:
+                content = f.read()[2:]  # Skip BOM
+                json_content = json.loads(content.decode('utf-16le'))
+                if 'model' not in json_content:
+                    raise ValueError("DataModelSchema missing 'model' section")
+                print("  ✅ DataModelSchema JSON is valid")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in DataModelSchema: {e}")
+        
+        # Validate Layout
+        try:
+            with open(os.path.join(temp_dir, 'Report', 'Layout'), 'rb') as f:
+                content = f.read()[2:]  # Skip BOM
+                json_content = json.loads(content.decode('utf-16le'))
+                if 'pages' not in json_content:
+                    raise ValueError("Layout missing 'pages' section")
+                print("  ✅ Layout JSON is valid")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in Layout: {e}")
+        
+        print("✅ All validations passed!")
     
     def _map_powerbi_datatype(self, tableau_type: str) -> str:
         """Map Tableau data types to Power BI Analysis Services types"""
@@ -338,7 +551,7 @@ class TableauToPowerBIConverter:
         return type_mapping.get(tableau_type.lower(), 'string')
     
     def create_pbit_file(self, template_structure: Dict, output_path: str, base_name: str):
-        """Create Power BI template (.pbit) file with correct encoding"""
+        """Create Power BI template (.pbit) file with correct encoding and structure"""
         try:
             pbit_path = os.path.join(output_path, f"{base_name}.pbit")
             
@@ -346,7 +559,10 @@ class TableauToPowerBIConverter:
             temp_dir = os.path.join(output_path, f"{base_name}_temp")
             os.makedirs(temp_dir, exist_ok=True)
             
+            print(f"🔧 Creating Power BI template structure in {temp_dir}")
+            
             # Write DataModelSchema (UTF-16 LE with BOM, no line breaks)
+            print("📝 Writing DataModelSchema...")
             with open(os.path.join(temp_dir, 'DataModelSchema'), 'wb') as f:
                 # Write BOM for UTF-16 LE
                 f.write(b'\xff\xfe')
@@ -358,6 +574,7 @@ class TableauToPowerBIConverter:
             report_dir = os.path.join(temp_dir, 'Report')
             os.makedirs(report_dir, exist_ok=True)
             
+            print("📝 Writing Layout...")
             with open(os.path.join(report_dir, 'Layout'), 'wb') as f:
                 # Write BOM for UTF-16 LE
                 f.write(b'\xff\xfe')
@@ -366,10 +583,12 @@ class TableauToPowerBIConverter:
                 f.write(json_str.encode('utf-16le'))
             
             # Write Version (UTF-8, no BOM)
+            print("📝 Writing Version...")
             with open(os.path.join(temp_dir, 'Version'), 'w', encoding='utf-8') as f:
                 f.write(template_structure['Version'])
             
             # Write Settings (UTF-16 LE with BOM)
+            print("📝 Writing Settings...")
             with open(os.path.join(temp_dir, 'Settings'), 'wb') as f:
                 # Write BOM for UTF-16 LE
                 f.write(b'\xff\xfe')
@@ -377,26 +596,45 @@ class TableauToPowerBIConverter:
                 json_str = json.dumps(template_structure['Settings'], ensure_ascii=False, separators=(',', ':'))
                 f.write(json_str.encode('utf-16le'))
             
-            # Create the .pbit file (ZIP archive with no compression to avoid corruption)
-            with zipfile.ZipFile(pbit_path, 'w', zipfile.ZIP_STORED, compresslevel=0) as zip_file:
+            # Write Metadata (UTF-16 LE with BOM) - This is required for proper .pbit files
+            print("📝 Writing Metadata...")
+            with open(os.path.join(temp_dir, 'Metadata'), 'wb') as f:
+                # Write BOM for UTF-16 LE  
+                f.write(b'\xff\xfe')
+                # Write JSON without formatting
+                json_str = json.dumps(template_structure['Metadata'], ensure_ascii=False, separators=(',', ':'))
+                f.write(json_str.encode('utf-16le'))
+            
+            # Validate generated files
+            print("🔍 Validating generated files...")
+            self._validate_pbit_structure(temp_dir)
+            
+            # Create the .pbit file (ZIP archive with standard compression)
+            print("📦 Creating .pbit ZIP archive...")
+            with zipfile.ZipFile(pbit_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zip_file:
                 for root, dirs, files in os.walk(temp_dir):
                     for file in files:
                         file_path = os.path.join(root, file)
                         arc_name = os.path.relpath(file_path, temp_dir)
                         zip_file.write(file_path, arc_name)
+                        print(f"  ➕ Added {arc_name}")
             
             # Clean up temp directory
             import shutil
             shutil.rmtree(temp_dir)
             
-            print(f"✅ Power BI template created: {pbit_path}")
-            print(f"📁 File size: {os.path.getsize(pbit_path)} bytes")
-            print(f"🎯 You can now open this file in Power BI Desktop!")
+            # Final validation
+            file_size = os.path.getsize(pbit_path)
+            print(f"\n✅ Power BI template created successfully!")
+            print(f"📁 File: {pbit_path}")
+            print(f"📊 Size: {file_size} bytes")
+            print(f"🎯 Ready to open in Power BI Desktop!")
+            print(f"💡 The template will prompt you to connect to your data source.")
             
             return pbit_path
             
         except Exception as e:
-            print(f"Error creating .pbit file: {e}")
+            print(f"❌ Error creating .pbit file: {e}")
             import traceback
             traceback.print_exc()
             return None
