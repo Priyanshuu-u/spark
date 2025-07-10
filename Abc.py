@@ -199,8 +199,18 @@ class TableauToPowerBIConverter:
                 {'name': 'Value', 'dataType': 'double'}
             ]
         
+        # Get enhanced connection information from Tableau
+        connection_info = {}
+        if tableau_data.get('datasources'):
+            ds = tableau_data['datasources'][0]
+            connection_info = ds.get('connection', {})
+            
+        # Generate enhanced M query based on connection type
+        m_query = self._generate_enhanced_m_query(table_name, connection_info)
+        
         print(f"📋 Using table name: {table_name}")
         print(f"📋 Generated {len(columns)} columns: {[col['name'] for col in columns]}")
+        print(f"🔗 Connection type: {connection_info.get('class', 'unknown')}")
         
         # Data Model Schema - Fixed structure for Power BI compatibility
         data_model_schema = {
@@ -270,7 +280,7 @@ class TableauToPowerBIConverter:
                                 "dataView": "full",
                                 "source": {
                                     "type": "m",
-                                    "expression": f'let\n    Source = Sql.Database("localhost", "SampleDB"),\n    dbo_{table_name} = Source{{[Schema="dbo",Item="{table_name}"]}}[Data]\nin\n    dbo_{table_name}'
+                                    "expression": m_query
                                 }
                             }
                         ]
@@ -357,21 +367,25 @@ class TableauToPowerBIConverter:
         if tableau_data.get('worksheets') and columns:
             visual_id = str(uuid.uuid4())
             
+            # Get the first worksheet for analysis
+            worksheet = tableau_data['worksheets'][0]
+            visual_type = self._get_tableau_visual_type(worksheet)
+            
             # Try to find category and value fields
             category_field = columns[0]['name']
             value_field = columns[1]['name'] if len(columns) > 1 else columns[0]['name']
             
             # Check Tableau worksheet for better field mapping
-            for ws in tableau_data.get('worksheets', []):
-                encodings = ws.get('encodings', {})
-                for attr, encoding in encodings.items():
-                    field = encoding.get('field', '').replace('[', '').replace(']', '')
-                    if field and any(col['name'] == field for col in columns):
-                        if attr in ['x', 'columns']:
-                            category_field = field
-                        elif attr in ['y', 'rows']:
-                            value_field = field
-                break
+            encodings = worksheet.get('encodings', {})
+            for attr, encoding in encodings.items():
+                field = encoding.get('field', '').replace('[', '').replace(']', '')
+                if field and any(col['name'] == field for col in columns):
+                    if attr in ['x', 'columns']:
+                        category_field = field
+                    elif attr in ['y', 'rows']:
+                        value_field = field
+            
+            print(f"📊 Creating {visual_type} visual: {category_field} vs {value_field}")
             
             # Create a proper visual container for Power BI
             visual_container = {
@@ -396,7 +410,7 @@ class TableauToPowerBIConverter:
                         }
                     ],
                     "singleVisual": {
-                        "visualType": "columnChart",
+                        "visualType": visual_type,
                         "projections": {
                             "Category": [
                                 {
@@ -456,8 +470,6 @@ class TableauToPowerBIConverter:
             
             # Add the visual to the page
             report_layout['pages'][0]['visualContainers'].append(visual_container)
-            
-            print(f"📊 Added column chart visual: {category_field} vs {value_field}")
         
         # Create metadata structure
         metadata = {
@@ -537,6 +549,88 @@ class TableauToPowerBIConverter:
             raise ValueError(f"Invalid JSON in Layout: {e}")
         
         print("✅ All validations passed!")
+    
+    def _get_tableau_visual_type(self, worksheet_data: Dict) -> str:
+        """Determine the best Power BI visual type based on Tableau worksheet data"""
+        # Check Tableau marks for visual type hints
+        marks = worksheet_data.get('marks', [])
+        encodings = worksheet_data.get('encodings', {})
+        
+        # Default to column chart
+        visual_type = "columnChart"
+        
+        for mark in marks:
+            mark_class = mark.get('class', '').lower()
+            if mark_class in ['bar', 'automatic']:
+                visual_type = "columnChart"
+            elif mark_class in ['line']:
+                visual_type = "lineChart"
+            elif mark_class in ['circle', 'shape']:
+                visual_type = "scatterChart"
+            elif mark_class in ['square', 'ganttbar']:
+                visual_type = "barChart"
+            elif mark_class in ['text']:
+                visual_type = "table"
+            elif mark_class in ['map']:
+                visual_type = "map"
+            break
+        
+        # Override based on encodings if more specific info available
+        if 'color' in encodings and 'size' in encodings:
+            visual_type = "scatterChart"
+        elif len(encodings) >= 3:
+            visual_type = "table"  # Multiple encodings suggest tabular data
+        
+        return visual_type
+    
+    def _generate_enhanced_m_query(self, table_name: str, connection_info: Dict) -> str:
+        """Generate more sophisticated M query based on connection information"""
+        
+        # Extract connection details
+        conn_class = connection_info.get('class', '').lower()
+        server = connection_info.get('server', 'localhost')
+        database = connection_info.get('dbname', 'SampleDB')
+        port = connection_info.get('port', '')
+        schema = connection_info.get('schema', 'dbo')
+        
+        if conn_class == 'oracle':
+            # Oracle-specific M query
+            if port:
+                server_with_port = f"{server}:{port}"
+            else:
+                server_with_port = server
+                
+            m_query = f'''let
+    Source = Oracle.Database("{server_with_port}", "{database}"),
+    {schema}_{table_name} = Source{{[Schema="{schema}",Item="{table_name}"]}}[Data]
+in
+    {schema}_{table_name}'''
+        
+        elif conn_class == 'mysql':
+            # MySQL-specific M query  
+            m_query = f'''let
+    Source = MySQL.Database("{server}", "{database}"),
+    {table_name}_Table = Source{{[Name="{table_name}"]}}[Data]
+in
+    {table_name}_Table'''
+        
+        elif conn_class == 'postgresql':
+            # PostgreSQL-specific M query
+            m_query = f'''let
+    Source = PostgreSQL.Database("{server}", "{database}"),
+    {schema}_{table_name} = Source{{[Schema="{schema}",Item="{table_name}"]}}[Data]
+in
+    {schema}_{table_name}'''
+        
+        else:
+            # Default SQL Server M query
+            m_query = f'''let
+    Source = Sql.Database("{server}", "{database}"),
+    {schema}_{table_name} = Source{{[Schema="{schema}",Item="{table_name}"]}}[Data]
+in
+    {schema}_{table_name}'''
+        
+        return m_query
     
     def _map_powerbi_datatype(self, tableau_type: str) -> str:
         """Map Tableau data types to Power BI Analysis Services types"""
@@ -639,6 +733,102 @@ class TableauToPowerBIConverter:
             traceback.print_exc()
             return None
     
+    def test_pbit_compatibility(self, pbit_path: str) -> bool:
+        """Test the generated .pbit file for Power BI compatibility"""
+        try:
+            print(f"\n🧪 Testing Power BI compatibility: {pbit_path}")
+            
+            # Test 1: Check if ZIP file is valid
+            with zipfile.ZipFile(pbit_path, 'r') as zip_file:
+                file_list = zip_file.namelist()
+                print(f"  ✅ ZIP file is valid ({len(file_list)} files)")
+                
+                # Test 2: Check required files are present
+                required_files = ['DataModelSchema', 'Version', 'Settings', 'Metadata', 'Report/Layout']
+                for req_file in required_files:
+                    if req_file not in file_list:
+                        print(f"  ❌ Missing required file: {req_file}")
+                        return False
+                print("  ✅ All required files present")
+                
+                # Test 3: Check file encodings and JSON validity
+                for file_name in file_list:
+                    if file_name == 'Version':
+                        # Version should be UTF-8
+                        content = zip_file.read(file_name)
+                        version = content.decode('utf-8')
+                        if not version.strip():
+                            print(f"  ❌ Version file is empty")
+                            return False
+                        print(f"  ✅ Version: {version.strip()}")
+                    else:
+                        # Other files should be UTF-16 LE with BOM and valid JSON
+                        content = zip_file.read(file_name)
+                        if len(content) < 3 or content[:2] != b'\xff\xfe':
+                            print(f"  ❌ {file_name} missing UTF-16 LE BOM")
+                            return False
+                        
+                        try:
+                            json_content = json.loads(content[2:].decode('utf-16le'))
+                            print(f"  ✅ {file_name} is valid JSON ({len(content)} bytes)")
+                        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                            print(f"  ❌ {file_name} JSON parse error: {e}")
+                            return False
+                
+                # Test 4: Check DataModelSchema structure
+                content = zip_file.read('DataModelSchema')
+                schema = json.loads(content[2:].decode('utf-16le'))
+                
+                required_schema_fields = ['version', 'name', 'model']
+                for field in required_schema_fields:
+                    if field not in schema:
+                        print(f"  ❌ DataModelSchema missing field: {field}")
+                        return False
+                
+                if 'tables' not in schema['model']:
+                    print(f"  ❌ DataModelSchema.model missing 'tables'")
+                    return False
+                
+                tables = schema['model']['tables']
+                if not tables:
+                    print(f"  ❌ No tables in DataModelSchema")
+                    return False
+                
+                table = tables[0]
+                if 'columns' not in table or not table['columns']:
+                    print(f"  ❌ Table has no columns")
+                    return False
+                
+                print(f"  ✅ DataModelSchema structure valid ({len(table['columns'])} columns)")
+                
+                # Test 5: Check Layout structure
+                content = zip_file.read('Report/Layout')
+                layout = json.loads(content[2:].decode('utf-16le'))
+                
+                if 'pages' not in layout:
+                    print(f"  ❌ Layout missing 'pages'")
+                    return False
+                
+                if not layout['pages']:
+                    print(f"  ❌ Layout has no pages")
+                    return False
+                
+                page = layout['pages'][0]
+                required_page_fields = ['id', 'width', 'height']
+                for field in required_page_fields:
+                    if field not in page:
+                        print(f"  ❌ Page missing field: {field}")
+                        return False
+                
+                print(f"  ✅ Layout structure valid ({len(layout['pages'])} pages)")
+                
+            print("  🎉 All compatibility tests passed!")
+            return True
+            
+        except Exception as e:
+            print(f"  ❌ Compatibility test failed: {e}")
+            return False
+    
     def analyze_extracted_data(self):
         """Print analysis of what was found in the Tableau file"""
         print("\n📊 TABLEAU ANALYSIS:")
@@ -732,7 +922,13 @@ class TableauToPowerBIConverter:
             pbit_path = self.create_pbit_file(template_structure, output_dir, base_name)
             
             if pbit_path:
-                print("Conversion completed successfully!")
+                # Run compatibility test
+                if self.test_pbit_compatibility(pbit_path):
+                    print("\n🎉 Conversion completed successfully!")
+                    print("✅ Generated .pbit file passed all compatibility tests!")
+                else:
+                    print("\n⚠️  Conversion completed with warnings!")
+                    print("🔍 Generated .pbit file may have compatibility issues!")
                 return True
             else:
                 print("Error: Failed to create .pbit file")
@@ -743,6 +939,77 @@ class TableauToPowerBIConverter:
             import traceback
             traceback.print_exc()
             return False
+
+def create_test_tableau_files():
+    """Create test Tableau files for testing different scenarios"""
+    
+    # Test file 1: Oracle connection with bar chart
+    oracle_twb = '''<?xml version='1.0' encoding='utf-8' ?>
+<workbook version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
+  <datasources>
+    <datasource caption='Sales Data' inline='true' name='oracle.salesdb' version='18.1'>
+      <connection class='oracle' dbname='SALESDB' port='1521' server='oracle-server' username='sales_user' schema='SALES' />
+      <column datatype='string' name='[Product_Category]' role='dimension' type='nominal' />
+      <column datatype='real' name='[Sales_Amount]' role='measure' type='quantitative' />
+      <column datatype='date' name='[Order_Date]' role='dimension' type='ordinal' />
+      <column datatype='string' name='[Region]' role='dimension' type='nominal' />
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='Sales by Category'>
+      <table>
+        <panes>
+          <pane>
+            <mark class='Bar' />
+            <encodings>
+              <color column='[oracle.salesdb].[Product_Category]' />
+              <size column='[oracle.salesdb].[Sales_Amount]' />
+            </encodings>
+          </pane>
+        </panes>
+      </table>
+    </worksheet>
+  </worksheets>
+</workbook>'''
+    
+    # Test file 2: MySQL connection with line chart  
+    mysql_twb = '''<?xml version='1.0' encoding='utf-8' ?>
+<workbook version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
+  <datasources>
+    <datasource caption='Time Series' inline='true' name='mysql.analytics' version='18.1'>
+      <connection class='mysql' dbname='analytics' port='3306' server='mysql-server' username='analyst' />
+      <column datatype='date' name='[Date]' role='dimension' type='ordinal' />
+      <column datatype='real' name='[Revenue]' role='measure' type='quantitative' />
+      <column datatype='integer' name='[Orders]' role='measure' type='quantitative' />
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='Revenue Trend'>
+      <table>
+        <panes>
+          <pane>
+            <mark class='Line' />
+            <encodings>
+              <columns column='[mysql.analytics].[Date]' />
+              <rows column='[mysql.analytics].[Revenue]' />
+            </encodings>
+          </pane>
+        </panes>
+      </table>
+    </worksheet>
+  </worksheets>
+</workbook>'''
+    
+    # Write test files
+    with open('/tmp/test_oracle.twb', 'w') as f:
+        f.write(oracle_twb)
+    
+    with open('/tmp/test_mysql.twb', 'w') as f:
+        f.write(mysql_twb)
+    
+    print("📝 Created test Tableau files:")
+    print("  - /tmp/test_oracle.twb (Oracle + Bar chart)")
+    print("  - /tmp/test_mysql.twb (MySQL + Line chart)")
 
 def main():
     parser = argparse.ArgumentParser(description='Convert Tableau workbook to Power BI template (.pbit)')
