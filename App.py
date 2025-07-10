@@ -371,33 +371,33 @@ class TableauToPowerBIConverter:
             json_path = os.path.join(output_dir, f"{base_name}_powerbi_config.json")
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(powerbi_config, f, indent=2, ensure_ascii=False)
-        
-        # Save DAX measures
-        try:
-            measures = self.generate_dax_measures(self.tableau_data)
-            dax_path = os.path.join(output_dir, f"{base_name}_measures.dax")
-            with open(dax_path, 'w', encoding='utf-8') as f:
-                f.write("// DAX Measures for Power BI\n")
-                f.write("// Generated from Tableau workbook\n\n")
+            
+            # Save DAX measures
+            try:
+                measures = self.generate_dax_measures(self.tableau_data)
+                dax_path = os.path.join(output_dir, f"{base_name}_measures.dax")
+                with open(dax_path, 'w', encoding='utf-8') as f:
+                    f.write("// DAX Measures for Power BI\n")
+                    f.write("// Generated from Tableau workbook\n\n")
+                    
+                    for measure in measures:
+                        f.write(f"// {measure['name']}\n")
+                        f.write(f"{measure['name']} = {measure['expression']}\n\n")
                 
-                for measure in measures:
-                    f.write(f"// {measure['name']}\n")
-                    f.write(f"{measure['name']} = {measure['expression']}\n\n")
-            
-            # Save setup instructions
-            instructions_path = os.path.join(output_dir, f"{base_name}_setup_instructions.md")
-            with open(instructions_path, 'w', encoding='utf-8') as f:
-                f.write(self._generate_setup_instructions(powerbi_config))
-            
-            print(f"Files saved to: {output_dir}")
-            print(f"- Configuration: {json_path}")
-            print(f"- DAX Measures: {dax_path}")
-            print(f"- Instructions: {instructions_path}")
-            
-        except Exception as e:
-            print(f"Warning: Could not save some files: {e}")
-            print(f"Main configuration saved to: {json_path}")
-            
+                # Save setup instructions
+                instructions_path = os.path.join(output_dir, f"{base_name}_setup_instructions.md")
+                with open(instructions_path, 'w', encoding='utf-8') as f:
+                    f.write(self._generate_setup_instructions(powerbi_config))
+                
+                print(f"Files saved to: {output_dir}")
+                print(f"- Configuration: {json_path}")
+                print(f"- DAX Measures: {dax_path}")
+                print(f"- Instructions: {instructions_path}")
+                
+            except Exception as e:
+                print(f"Warning: Could not save some files: {e}")
+                print(f"Main configuration saved to: {json_path}")
+                
         except Exception as e:
             print(f"Error saving files: {e}")
             # At least try to save the main config file to desktop
