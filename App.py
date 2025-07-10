@@ -359,35 +359,106 @@ class TableauToPowerBIConverter:
     
     def save_powerbi_files(self, powerbi_config: Dict, output_dir: str, base_name: str):
         """Save Power BI configuration files"""
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Save JSON configuration
-        json_path = os.path.join(output_dir, f"{base_name}_powerbi_config.json")
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(powerbi_config, f, indent=2, ensure_ascii=False)
+        try:
+            # Clean up the output directory path
+            output_dir = os.path.abspath(output_dir)
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Clean up base name - remove invalid characters
+            base_name = "".join(c for c in base_name if c.isalnum() or c in (' ', '-', '_')).strip()
+            
+            # Save JSON configuration
+            json_path = os.path.join(output_dir, f"{base_name}_powerbi_config.json")
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(powerbi_config, f, indent=2, ensure_ascii=False)
         
         # Save DAX measures
-        measures = self.generate_dax_measures(self.tableau_data)
-        dax_path = os.path.join(output_dir, f"{base_name}_measures.dax")
-        with open(dax_path, 'w', encoding='utf-8') as f:
-            f.write("// DAX Measures for Power BI\n")
-            f.write("// Generated from Tableau workbook\n\n")
+        try:
+            measures = self.generate_dax_measures(self.tableau_data)
+            dax_path = os.path.join(output_dir, f"{base_name}_measures.dax")
+            with open(dax_path, 'w', encoding='utf-8') as f:
+                f.write("// DAX Measures for Power BI\n")
+                f.write("// Generated from Tableau workbook\n\n")
+                
+                for measure in measures:
+                    f.write(f"// {measure['name']}\n")
+                    f.write(f"{measure['name']} = {measure['expression']}\n\n")
             
-            for measure in measures:
-                f.write(f"// {measure['name']}\n")
-                f.write(f"{measure['name']} = {measure['expression']}\n\n")
-        
-        # Save setup instructions
-        instructions_path = os.path.join(output_dir, f"{base_name}_setup_instructions.md")
-        with open(instructions_path, 'w', encoding='utf-8') as f:
-            f.write(self._generate_setup_instructions(powerbi_config))
-        
-        print(f"Files saved to: {output_dir}")
-        print(f"- Configuration: {json_path}")
-        print(f"- DAX Measures: {dax_path}")
-        print(f"- Instructions: {instructions_path}")
+            # Save setup instructions
+            instructions_path = os.path.join(output_dir, f"{base_name}_setup_instructions.md")
+            with open(instructions_path, 'w', encoding='utf-8') as f:
+                f.write(self._generate_setup_instructions(powerbi_config))
+            
+            print(f"Files saved to: {output_dir}")
+            print(f"- Configuration: {json_path}")
+            print(f"- DAX Measures: {dax_path}")
+            print(f"- Instructions: {instructions_path}")
+            
+        except Exception as e:
+            print(f"Warning: Could not save some files: {e}")
+            print(f"Main configuration saved to: {json_path}")
+            
+        except Exception as e:
+            print(f"Error saving files: {e}")
+            # At least try to save the main config file to desktop
+            try:
+                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+                fallback_path = os.path.join(desktop_path, f"{base_name}_powerbi_config.json")
+                with open(fallback_path, 'w', encoding='utf-8') as f:
+                    json.dump(powerbi_config, f, indent=2, ensure_ascii=False)
+                print(f"Configuration saved to desktop: {fallback_path}")
+            except:
+                print("Could not save files. Please check permissions and paths.")
     
-    def _generate_setup_instructions(self, powerbi_config: Dict) -> str:
+    def analyze_extracted_data(self):
+        """Print analysis of what was found in the Tableau file"""
+        print("\n📊 TABLEAU ANALYSIS:")
+        print("=" * 50)
+        
+        # Datasources
+        datasources = self.tableau_data.get('datasources', [])
+        print(f"📋 Found {len(datasources)} datasource(s):")
+        for i, ds in enumerate(datasources):
+            print(f"  {i+1}. {ds.get('name', 'Unknown')}")
+            conn = ds.get('connection', {})
+            if conn.get('class'):
+                print(f"     Type: {conn.get('class')}")
+            if conn.get('server'):
+                print(f"     Server: {conn.get('server')}")
+            if conn.get('dbname'):
+                print(f"     Database: {conn.get('dbname')}")
+            
+            columns = ds.get('columns', [])
+            print(f"     Columns: {len(columns)} found")
+            for col in columns[:5]:  # Show first 5 columns
+                col_name = col.get('name', '').replace('[', '').replace(']', '')
+                if col_name:
+                    print(f"       - {col_name} ({col.get('datatype', 'unknown')})")
+            if len(columns) > 5:
+                print(f"       ... and {len(columns) - 5} more")
+        
+        # Worksheets
+        worksheets = self.tableau_data.get('worksheets', [])
+        print(f"\n📈 Found {len(worksheets)} worksheet(s):")
+        for i, ws in enumerate(worksheets):
+            print(f"  {i+1}. {ws.get('name', 'Unknown')}")
+            encodings = ws.get('encodings', {})
+            if encodings:
+                print(f"     Field mappings:")
+                for attr, encoding in encodings.items():
+                    field = encoding.get('field', '').replace('[', '').replace(']', '')
+                    if field:
+                        print(f"       {attr}: {field}")
+        
+        # Dashboards
+        dashboards = self.tableau_data.get('dashboards', [])
+        print(f"\n📱 Found {len(dashboards)} dashboard(s):")
+        for i, db in enumerate(dashboards):
+            print(f"  {i+1}. {db.get('name', 'Unknown')}")
+            zones = db.get('zones', [])
+            print(f"     Layout zones: {len(zones)}")
+        
+        print("=" * 50)
         """Generate setup instructions for Power BI"""
         instructions = """# Power BI Setup Instructions
 
@@ -462,6 +533,9 @@ class TableauToPowerBIConverter:
             if not self.tableau_data:
                 print("Error: Could not parse Tableau workbook")
                 return False
+            
+            # Show what was found
+            self.analyze_extracted_data()
             
             # Convert to Power BI format
             print("Converting to Power BI format...")
