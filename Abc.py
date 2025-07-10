@@ -500,4 +500,123 @@ class TableauToPowerBIConverter:
         # Datasources
         datasources = self.tableau_data.get('datasources', [])
         print(f"📋 Found {len(datasources)} datasource(s):")
-        for i, ds in enumerate(datasources
+        for i, ds in enumerate(datasources):
+            print(f"  {i+1}. {ds.get('name', 'Unknown')}")
+            conn = ds.get('connection', {})
+            if conn.get('class'):
+                print(f"     Type: {conn.get('class')}")
+            if conn.get('server'):
+                print(f"     Server: {conn.get('server')}")
+            if conn.get('dbname'):
+                print(f"     Database: {conn.get('dbname')}")
+            
+            columns = ds.get('columns', [])
+            print(f"     Columns: {len(columns)} found")
+            for col in columns[:5]:  # Show first 5 columns
+                col_name = col.get('name', '').replace('[', '').replace(']', '')
+                if col_name:
+                    print(f"       - {col_name} ({col.get('datatype', 'unknown')})")
+            if len(columns) > 5:
+                print(f"       ... and {len(columns) - 5} more")
+        
+        # Worksheets
+        worksheets = self.tableau_data.get('worksheets', [])
+        print(f"\n📈 Found {len(worksheets)} worksheet(s):")
+        for i, ws in enumerate(worksheets):
+            print(f"  {i+1}. {ws.get('name', 'Unknown')}")
+            encodings = ws.get('encodings', {})
+            if encodings:
+                print(f"     Field mappings:")
+                for attr, encoding in encodings.items():
+                    field = encoding.get('field', '').replace('[', '').replace(']', '')
+                    if field:
+                        print(f"       {attr}: {field}")
+        
+        # Dashboards
+        dashboards = self.tableau_data.get('dashboards', [])
+        print(f"\n📱 Found {len(dashboards)} dashboard(s):")
+        for i, db in enumerate(dashboards):
+            print(f"  {i+1}. {db.get('name', 'Unknown')}")
+            zones = db.get('zones', [])
+            print(f"     Layout zones: {len(zones)}")
+        
+        print("=" * 50)
+    
+    def convert_file(self, input_path: str, output_dir: str = None) -> bool:
+        """Main conversion function"""
+        try:
+            if not os.path.exists(input_path):
+                print(f"❌ Error: Input file '{input_path}' not found")
+                return False
+            
+            # Set output directory
+            if output_dir is None:
+                output_dir = os.path.dirname(input_path)
+            
+            base_name = os.path.splitext(os.path.basename(input_path))[0]
+            
+            print(f"🔄 Converting: {input_path}")
+            
+            # Extract .twbx if needed
+            if input_path.endswith('.twbx'):
+                print("📂 Extracting .twbx file...")
+                twb_path = self.extract_twbx(input_path)
+                if not twb_path:
+                    return False
+            else:
+                twb_path = input_path
+            
+            # Parse Tableau workbook
+            print("📖 Parsing Tableau workbook...")
+            self.tableau_data = self.parse_tableau_workbook(twb_path)
+            
+            if not self.tableau_data:
+                print("❌ Error: Could not parse Tableau workbook")
+                return False
+            
+            # Show what was found
+            self.analyze_extracted_data()
+            
+            # Generate Power BI template structure
+            print("🏗️  Generating Power BI template structure...")
+            template_structure = self.generate_valid_pbit_structure(self.tableau_data)
+            
+            # Create .pbit file
+            print("💾 Creating Power BI template file...")
+            pbit_path = self.create_pbit_file(template_structure, output_dir, base_name)
+            
+            if pbit_path:
+                print("\n🎉 Conversion completed successfully!")
+                return True
+            else:
+                print("\n❌ Error: Failed to create .pbit file")
+                return False
+            
+        except Exception as e:
+            print(f"❌ Error during conversion: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+def main():
+    parser = argparse.ArgumentParser(description='Convert Tableau workbook to Power BI template (.pbit)')
+    parser.add_argument('input', help='Input Tableau file (.twbx or .twb)')
+    parser.add_argument('-o', '--output', help='Output directory (default: same as input)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
+    
+    args = parser.parse_args()
+    
+    converter = TableauToPowerBIConverter()
+    success = converter.convert_file(args.input, args.output)
+    
+    if success:
+        print("\n✅ Conversion completed successfully!")
+        print("🎯 You can now open the .pbit file directly in Power BI Desktop!")
+        print("💡 The template will prompt you to connect to your data source.")
+        print("⚠️  If you get connection errors, you may need to update the data source settings in Power BI.")
+    else:
+        print("\n❌ Conversion failed!")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
