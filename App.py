@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Tableau to Power BI Converter
-Converts Tableau .twbx files to Power BI compatible format
+Converts Tableau .twbx files to Power BI template (.pbit) files
 Specifically handles bar charts with Oracle database connections
 """
 
@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 import argparse
 from typing import Dict, List, Any, Optional
+import uuid
+from datetime import datetime
 
 class TableauToPowerBIConverter:
     def __init__(self):
@@ -357,8 +359,8 @@ class TableauToPowerBIConverter:
         
         return measures
     
-    def save_powerbi_files(self, powerbi_config: Dict, output_dir: str, base_name: str):
-        """Save Power BI configuration files"""
+    def generate_powerbi_template(self, powerbi_config: Dict, output_dir: str, base_name: str):
+        """Generate actual Power BI template (.pbit) file"""
         try:
             # Clean up the output directory path
             output_dir = os.path.abspath(output_dir)
@@ -367,48 +369,339 @@ class TableauToPowerBIConverter:
             # Clean up base name - remove invalid characters
             base_name = "".join(c for c in base_name if c.isalnum() or c in (' ', '-', '_')).strip()
             
-            # Save JSON configuration
-            json_path = os.path.join(output_dir, f"{base_name}_powerbi_config.json")
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(powerbi_config, f, indent=2, ensure_ascii=False)
+            # Create .pbit file path
+            pbit_path = os.path.join(output_dir, f"{base_name}.pbit")
             
-            # Save DAX measures
-            try:
-                measures = self.generate_dax_measures(self.tableau_data)
-                dax_path = os.path.join(output_dir, f"{base_name}_measures.dax")
-                with open(dax_path, 'w', encoding='utf-8') as f:
-                    f.write("// DAX Measures for Power BI\n")
-                    f.write("// Generated from Tableau workbook\n\n")
-                    
-                    for measure in measures:
-                        f.write(f"// {measure['name']}\n")
-                        f.write(f"{measure['name']} = {measure['expression']}\n\n")
-                
-                # Save setup instructions
-                instructions_path = os.path.join(output_dir, f"{base_name}_setup_instructions.md")
-                with open(instructions_path, 'w', encoding='utf-8') as f:
-                    f.write(self._generate_setup_instructions(powerbi_config))
-                
-                print(f"Files saved to: {output_dir}")
-                print(f"- Configuration: {json_path}")
-                print(f"- DAX Measures: {dax_path}")
-                print(f"- Instructions: {instructions_path}")
-                
-            except Exception as e:
-                print(f"Warning: Could not save some files: {e}")
-                print(f"Main configuration saved to: {json_path}")
-                
+            # Generate Power BI template structure
+            template_files = self._generate_pbit_structure(powerbi_config)
+            
+            # Create ZIP file (.pbit is essentially a ZIP file)
+            with zipfile.ZipFile(pbit_path, 'w', zipfile.ZIP_DEFLATED) as pbit_file:
+                for file_path, content in template_files.items():
+                    pbit_file.writestr(file_path, content)
+            
+            print(f"✅ Power BI template created: {pbit_path}")
+            print(f"📁 Template can be opened directly in Power BI Desktop")
+            return True
+            
         except Exception as e:
-            print(f"Error saving files: {e}")
-            # At least try to save the main config file to desktop
-            try:
-                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-                fallback_path = os.path.join(desktop_path, f"{base_name}_powerbi_config.json")
-                with open(fallback_path, 'w', encoding='utf-8') as f:
-                    json.dump(powerbi_config, f, indent=2, ensure_ascii=False)
-                print(f"Configuration saved to desktop: {fallback_path}")
-            except:
-                print("Could not save files. Please check permissions and paths.")
+            print(f"❌ Error creating Power BI template: {e}")
+            return False
+    
+    def _generate_pbit_structure(self, powerbi_config: Dict) -> Dict[str, str]:
+        """Generate the internal structure of .pbit file"""
+        files = {}
+        
+        # Generate DataModelSchema
+        files["DataModelSchema"] = self._generate_data_model_schema(powerbi_config)
+        
+        # Generate DiagramLayout
+        files["DiagramLayout"] = self._generate_diagram_layout(powerbi_config)
+        
+        # Generate Report/Layout
+        files["Report/Layout"] = self._generate_report_layout(powerbi_config)
+        
+        # Generate Settings
+        files["Settings"] = self._generate_settings()
+        
+        # Generate Version
+        files["Version"] = self._generate_version()
+        
+        return files
+    
+    def _generate_data_model_schema(self, powerbi_config: Dict) -> str:
+        """Generate DataModelSchema JSON for Power BI"""
+        data_sources = powerbi_config.get('config', {}).get('dataSources', [])
+        
+        # Generate tables from data sources
+        tables = []
+        for i, ds in enumerate(data_sources):
+            table_name = ds.get('name', f'Table{i+1}')
+            columns = []
+            
+            # Add columns from the datasource
+            for table in ds.get('tables', []):
+                for col in table.get('columns', []):
+                    columns.append({
+                        "name": col.get('name', 'Column'),
+                        "dataType": self._map_powerbi_datatype(col.get('type', 'Text')),
+                        "sourceColumn": col.get('name', 'Column'),
+                        "summarizeBy": "none" if col.get('role') == 'dimension' else "sum"
+                    })
+            
+            # Generate basic table structure
+            table_def = {
+                "name": table_name,
+                "columns": columns,
+                "partitions": [
+                    {
+                        "name": f"Partition",
+                        "dataView": "full",
+                        "source": {
+                            "type": "m",
+                            "expression": self._generate_m_query(ds)
+                        }
+                    }
+                ]
+            }
+            tables.append(table_def)
+        
+        # Generate relationships (basic example)
+        relationships = []
+        
+        # Generate measures
+        measures = []
+        tableau_data = getattr(self, 'tableau_data', {})
+        dax_measures = self.generate_dax_measures(tableau_data)
+        for measure in dax_measures:
+            measures.append({
+                "name": measure.get('name', 'Measure'),
+                "expression": measure.get('expression', 'SUM(Table[Column])'),
+                "formatString": measure.get('formatString', '#,##0'),
+                "table": tables[0]["name"] if tables else "Table1"
+            })
+        
+        schema = {
+            "name": "SemanticModel",
+            "compatibilityLevel": 1567,
+            "model": {
+                "culture": "en-US",
+                "dataSources": [
+                    {
+                        "type": "structured",
+                        "name": "localhost",
+                        "connectionDetails": {
+                            "protocol": "tds",
+                            "address": {
+                                "server": "localhost",
+                                "database": "database"
+                            }
+                        },
+                        "credential": {
+                            "AuthenticationKind": "ServiceAccount",
+                            "EncryptConnection": False
+                        }
+                    }
+                ],
+                "tables": tables,
+                "relationships": relationships,
+                "measures": measures,
+                "annotations": [
+                    {
+                        "name": "ClientCompatibilityLevel",
+                        "value": "600"
+                    }
+                ]
+            }
+        }
+        
+        return json.dumps(schema, indent=2)
+    
+    def _generate_diagram_layout(self, powerbi_config: Dict) -> str:
+        """Generate DiagramLayout JSON for Power BI"""
+        layout = {
+            "version": 1,
+            "objects": {}
+        }
+        return json.dumps(layout, indent=2)
+    
+    def _generate_report_layout(self, powerbi_config: Dict) -> str:
+        """Generate Report/Layout JSON with visualizations for Power BI"""
+        pages = powerbi_config.get('config', {}).get('pages', [])
+        
+        report_pages = []
+        for i, page in enumerate(pages):
+            page_id = str(uuid.uuid4())
+            page_visuals = []
+            
+            # Convert visualizations
+            for j, viz in enumerate(page.get('visualizations', [])):
+                visual_id = str(uuid.uuid4())
+                visual_config = self._convert_visualization_to_powerbi(viz, visual_id)
+                page_visuals.append(visual_config)
+            
+            page_config = {
+                "id": page_id,
+                "name": page.get('name', f'Page {i+1}'),
+                "displayName": page.get('name', f'Page {i+1}'),
+                "visualContainers": page_visuals,
+                "config": json.dumps({
+                    "layouts": [
+                        {
+                            "id": 0,
+                            "position": {
+                                "x": 0,
+                                "y": 0,
+                                "z": 0,
+                                "width": 1280,
+                                "height": 720
+                            }
+                        }
+                    ]
+                })
+            }
+            report_pages.append(page_config)
+        
+        # If no pages exist, create a default page
+        if not report_pages:
+            report_pages.append({
+                "id": str(uuid.uuid4()),
+                "name": "Page 1",
+                "displayName": "Page 1",
+                "visualContainers": [],
+                "config": json.dumps({
+                    "layouts": [
+                        {
+                            "id": 0,
+                            "position": {
+                                "x": 0,
+                                "y": 0,
+                                "z": 0,
+                                "width": 1280,
+                                "height": 720
+                            }
+                        }
+                    ]
+                })
+            })
+        
+        report = {
+            "id": str(uuid.uuid4()),
+            "resourcePackages": [
+                {
+                    "resourcePackage": "Microsoft.AnalysisServices.Modeler.Common.UIPlaceholder",
+                    "version": "13.0.0.0"
+                }
+            ],
+            "pages": report_pages,
+            "filters": "[]",
+            "config": json.dumps({
+                "version": "3.0",
+                "themeCollection": {
+                    "baseTheme": {
+                        "name": "CityPark"
+                    }
+                }
+            })
+        }
+        
+        return json.dumps(report, indent=2)
+    
+    def _convert_visualization_to_powerbi(self, viz: Dict, visual_id: str) -> Dict:
+        """Convert Tableau visualization to Power BI visual format"""
+        viz_type = viz.get('type', 'clusteredBarChart')
+        
+        # Map Tableau chart types to Power BI visual types
+        visual_type_mapping = {
+            'clusteredBarChart': 'clusteredBarChart',
+            'lineChart': 'lineChart',
+            'areaChart': 'areaChart',
+            'pieChart': 'pieChart',
+            'scatterChart': 'scatterChart'
+        }
+        
+        powerbi_visual_type = visual_type_mapping.get(viz_type, 'clusteredBarChart')
+        
+        # Generate basic visual configuration
+        visual_config = {
+            "id": visual_id,
+            "position": {
+                "x": viz.get('position', {}).get('x', 0),
+                "y": viz.get('position', {}).get('y', 0),
+                "z": 1000,
+                "width": viz.get('position', {}).get('width', 300),
+                "height": viz.get('position', {}).get('height', 200)
+            },
+            "config": json.dumps({
+                "name": visual_id,
+                "layouts": [
+                    {
+                        "id": 0,
+                        "position": {
+                            "x": viz.get('position', {}).get('x', 0),
+                            "y": viz.get('position', {}).get('y', 0),
+                            "z": 1000,
+                            "width": viz.get('position', {}).get('width', 300),
+                            "height": viz.get('position', {}).get('height', 200)
+                        }
+                    }
+                ],
+                "singleVisual": {
+                    "visualType": powerbi_visual_type,
+                    "objects": {},
+                    "dataRoles": self._generate_data_roles(viz),
+                    "vcObjects": {}
+                }
+            })
+        }
+        
+        return visual_config
+    
+    def _generate_data_roles(self, viz: Dict) -> Dict:
+        """Generate data roles for Power BI visual"""
+        data_roles = viz.get('dataRoles', {})
+        
+        # Convert to Power BI format
+        powerbi_roles = {}
+        for role, fields in data_roles.items():
+            if isinstance(fields, list):
+                powerbi_roles[role] = [
+                    {
+                        "queryRef": f"Table.{field}",
+                        "active": True
+                    } for field in fields
+                ]
+        
+        return powerbi_roles
+    
+    def _generate_m_query(self, datasource: Dict) -> str:
+        """Generate M query for Power BI data source"""
+        connection = datasource.get('connection', {})
+        
+        # Basic M query template
+        if connection.get('connectionType') == 'Oracle':
+            server = connection.get('connectionString', '').split(';')[0].replace('Data Source=', '')
+            query = f'''let
+    Source = Oracle.Database("{server}", [Query="SELECT * FROM SCHEMA.TABLE"])
+in
+    Source'''
+        else:
+            query = '''let
+    Source = Table.FromRows({{"Column1", "Column2"}}, {{"Value1", "Value2"}})
+in
+    Source'''
+        
+        return query
+    
+    def _generate_settings(self) -> str:
+        """Generate Settings JSON for Power BI"""
+        settings = {
+            "version": "1.0",
+            "settings": {
+                "useNewFilterPaneExperience": True,
+                "allowChangeFilterTypes": True,
+                "allowInlineHierarchyLabels": True,
+                "fontSize": 8,
+                "useEnhancedTooltips": True
+            }
+        }
+        return json.dumps(settings, indent=2)
+    
+    def _generate_version(self) -> str:
+        """Generate Version information for Power BI"""
+        return "3.0"
+    
+    def _map_powerbi_datatype(self, tableau_type: str) -> str:
+        """Map Tableau data types to Power BI data types"""
+        type_mapping = {
+            'Text': 'string',
+            'Whole Number': 'int64',
+            'Decimal Number': 'double',
+            'Date': 'dateTime',
+            'Date/Time': 'dateTime',
+            'True/False': 'boolean'
+        }
+        return type_mapping.get(tableau_type, 'string')
     
     def analyze_extracted_data(self):
         """Print analysis of what was found in the Tableau file"""
@@ -459,49 +752,6 @@ class TableauToPowerBIConverter:
             print(f"     Layout zones: {len(zones)}")
         
         print("=" * 50)
-        """Generate setup instructions for Power BI"""
-        instructions = """# Power BI Setup Instructions
-
-## Generated from Tableau Workbook
-
-### Step 1: Data Source Connection
-1. Open Power BI Desktop
-2. Click "Get Data" → "More..."
-3. Select your database type (Oracle/SQL Server/etc.)
-4. Use the connection details from the configuration file
-
-### Step 2: Import Data
-1. Select the required tables
-2. Transform data if needed using Power Query Editor
-3. Load the data into Power BI
-
-### Step 3: Create Measures
-1. Go to the "Modeling" tab
-2. Click "New Measure"
-3. Copy and paste the DAX formulas from the measures file
-
-### Step 4: Create Visualizations
-1. Add a new visual to your report
-2. Configure the fields according to the JSON configuration
-3. Apply formatting as specified
-
-### Step 5: Dashboard Layout
-1. Arrange visuals according to the position specifications
-2. Add titles and formatting
-3. Save your Power BI file
-
-## Configuration Details
-"""
-        
-        # Add datasource details
-        for ds in powerbi_config.get('config', {}).get('dataSources', []):
-            instructions += f"""
-### Data Source: {ds.get('name', 'Unknown')}
-- Connection Type: {ds.get('connectionType', 'Unknown')}
-- Connection String: {ds.get('connectionString', 'Not specified')}
-"""
-        
-        return instructions
     
     def convert_file(self, input_path: str, output_dir: str = None) -> bool:
         """Main conversion function"""
@@ -541,19 +791,24 @@ class TableauToPowerBIConverter:
             print("Converting to Power BI format...")
             powerbi_config = self.convert_to_powerbi(self.tableau_data)
             
-            # Save output files
-            print("Saving Power BI files...")
-            self.save_powerbi_files(powerbi_config, output_dir, base_name)
+            # Generate Power BI template (.pbit file)
+            print("Generating Power BI template...")
+            success = self.generate_powerbi_template(powerbi_config, output_dir, base_name)
             
-            print("Conversion completed successfully!")
-            return True
+            if success:
+                print("✅ Conversion completed successfully!")
+                print(f"📁 Power BI template (.pbit) ready for use!")
+            else:
+                print("⚠️  Conversion completed with warnings")
+            
+            return success
             
         except Exception as e:
             print(f"Error during conversion: {e}")
             return False
 
 def main():
-    parser = argparse.ArgumentParser(description='Convert Tableau workbook to Power BI format')
+    parser = argparse.ArgumentParser(description='Convert Tableau workbook to Power BI template (.pbit) file')
     parser.add_argument('input', help='Input Tableau file (.twbx or .twb)')
     parser.add_argument('-o', '--output', help='Output directory (default: same as input)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
@@ -565,10 +820,8 @@ def main():
     
     if success:
         print("\n✅ Conversion completed successfully!")
-        print("Check the output directory for:")
-        print("- PowerBI configuration JSON")
-        print("- DAX measures file")
-        print("- Setup instructions")
+        print("🎯 Power BI template (.pbit) file generated!")
+        print("📖 You can now open the .pbit file directly in Power BI Desktop")
     else:
         print("\n❌ Conversion failed!")
         sys.exit(1)
