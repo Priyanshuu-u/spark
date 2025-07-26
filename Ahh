@@ -1,1 +1,174 @@
 https://chatgpt.com/backend-api/estuary/content?id=file-UXNk9qd7psmiLpSpfzhEWE&ts=487096&p=fs&cid=1&sig=eae7363feb19eb6d6759fa4a6a4588e6ee00ff747a54bafdea320d89bcb652b6
+Of course, Priyanshu! Here's the full content of the presentation in clean, copyable format, organized slide-by-slide. You can directly copy this into PowerPoint, Google Slides, or a PDF editor.
+
+
+---
+
+Slide 1: Title Slide
+
+Title: Automating Tableau to Power BI Dashboard Conversion
+Presented by: Priyanshu Rajpurohit
+Role: Global Product & Technology Intern, ADP
+
+
+---
+
+Slide 2: What, Why, How
+
+What
+
+Build an automation tool to convert Tableau dashboards into Power BI dashboards.
+
+
+Why
+
+Tableau licensing costs ADP ~$1 million annually.
+
+Power BI offers cost-efficiency and better integration with Microsoft tools.
+
+
+How
+
+Study both platforms (Tableau & Power BI).
+
+Understand data and file structures.
+
+Write Python scripts to automate basic conversion.
+
+
+
+---
+
+Slide 3: Why Move to Power BI?
+
+Feature	Power BI	Tableau
+
+Licensing Cost	~₹800/user/year (Pro)	₹30,000+/user/year
+Ecosystem	Microsoft ecosystem (Excel, Teams, Azure)	Standalone
+Learning Curve	Easier for beginners	Steeper
+Data Modeling	DAX + Semantic Model	LOD Calculations
+Governance & Security	Azure Active Directory Integration	Good but less native to MS tools
+AI Capabilities	Copilot, Smart Narratives	Ask Data
+Export & Embedding	Power Platform APIs	Extensions/API needed
+File Format	.pbix, .pbir (open, JSON)	.twb, .twbx (XML/zipped)
+
+
+
+---
+
+Slide 4: Technical Challenges Identified
+
+.twbx (Tableau) is a zipped XML package referencing external data.
+
+.pbix (Power BI) is an encrypted binary file and undocumented.
+
+No direct API for converting between formats.
+
+Calculations, joins, and visual elements differ significantly.
+
+
+
+---
+
+Slide 5: My Learning Approach
+
+1. Learned fundamentals of Tableau and Power BI dashboards.
+
+
+2. Explored .twbx file structure by unzipping and parsing XML.
+
+
+3. Identified mapping between Tableau metadata and Power BI components.
+
+
+4. Built initial automation in Python.
+
+
+5. Found .pbir format — a new, JSON-based format compatible with Power BI.
+
+
+
+
+---
+
+Slide 6: Workflow Summary
+
+Step-by-step process:
+
+Tableau (.twbx)
+↓  [Zip + XML Parse]
+Extract Metadata + Data Sources
+↓
+Mapped to Power BI Format
+↓
+Python script generates .pbir File
+↓
+Open in Power BI Desktop
+
+
+---
+
+Slide 7: Proof of Concept
+
+Used dummy CSV data to simulate dashboard structure.
+
+Parsed metadata from .twbx.
+
+Generated .pbir with bar and line chart visuals using Python.
+
+Demonstrated successful preview in Power BI Desktop.
+
+
+
+---
+
+Slide 8: Challenges Faced
+
+Cannot programmatically generate .pbix — it's encrypted.
+
+.pbir is in early stages — limited support for complex visuals.
+
+Translating Tableau's calculated fields to Power BI’s DAX is non-trivial.
+
+No Copilot access yet.
+
+Waiting on Oracle DB credentials to test real ADP dashboards.
+
+
+
+---
+
+Slide 9: What's Next
+
+Connect to a real Tableau dashboard backed by Oracle DB.
+
+Automate mapping of relationships, joins, and visual elements.
+
+Use LLMs (like GPT/Copilot) to convert Tableau formulas to DAX/M.
+
+Explore Power BI REST APIs for automation and report publishing.
+
+Build an extensible tool that works on various dashboards.
+
+
+
+---
+
+Slide 10: Final Thoughts
+
+This is a technically ambitious and high-impact automation project.
+
+I’ve focused on deep research and foundational setup.
+
+The basic proof-of-concept is working; now ready to scale.
+
+Looking forward to applying this to real ADP dashboards.
+
+Open to suggestions, feedback, and team collaboration.
+
+
+
+---
+
+Let me know if you want this exported to Google Docs for sharing or tweaking online!
+
