@@ -371,9 +371,8 @@ class TableauToPowerBIConverter:
             json_path = os.path.join(output_dir, f"{base_name}_powerbi_config.json")
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(powerbi_config, f, indent=2, ensure_ascii=False)
-        
-        # Save DAX measures
-        try:
+            
+            # Save DAX measures
             measures = self.generate_dax_measures(self.tableau_data)
             dax_path = os.path.join(output_dir, f"{base_name}_measures.dax")
             with open(dax_path, 'w', encoding='utf-8') as f:
@@ -459,6 +458,8 @@ class TableauToPowerBIConverter:
             print(f"     Layout zones: {len(zones)}")
         
         print("=" * 50)
+    
+    def _generate_setup_instructions(self, powerbi_config: Dict) -> str:
         """Generate setup instructions for Power BI"""
         instructions = """# Power BI Setup Instructions
 
